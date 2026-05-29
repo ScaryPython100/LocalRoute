@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { nodes, paths } from "../data/communityGraph";
@@ -11,20 +11,33 @@ function MapBoundsUpdater({ pathCoordinates }) {
   const map = useMap();
   useEffect(() => {
     if (pathCoordinates && pathCoordinates.length > 0) {
-      // Bounding box containing the Main Gate and the chosen villa
       const bounds = L.latLngBounds(pathCoordinates);
       map.fitBounds(bounds, { padding: [50, 50], maxZoom: 18, animate: true, duration: 1.5 });
     } else {
-      // Default center at Main Gate with high-zoom detail
       map.setView(nodes.main_gate, 17, { animate: true, duration: 1.5 });
     }
   }, [pathCoordinates, map]);
   return null;
 }
 
+// Developer helper component to listen for map click coordinates
+function MapClickHandler({ onMapClick }) {
+  useMapEvents({
+    click(e) {
+      const { lat, lng } = e.latlng;
+      console.log(`[${lat.toFixed(6)}, ${lng.toFixed(6)}],`);
+      if (onMapClick) {
+        onMapClick({ lat, lng });
+      }
+    },
+  });
+  return null;
+}
+
 export default function MapComponent() {
   const [destination, setDestination] = useState("");
   const [isClient, setIsClient] = useState(false);
+  const [lastClicked, setLastClicked] = useState(null);
 
   useEffect(() => {
     setIsClient(true);
@@ -69,7 +82,6 @@ export default function MapComponent() {
         </div>
       `;
     } else {
-      // Standard inactive villa
       iconHtml = `
         <div class="flex items-center justify-center w-7 h-7 rounded-full bg-slate-700 text-white border border-slate-200/50 shadow-md">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-3.5 h-3.5">
@@ -130,6 +142,28 @@ export default function MapComponent() {
         )}
       </div>
 
+      {/* Floating Developer Helper: Click Coordinate Display HUD */}
+      {lastClicked && (
+        <div className="absolute top-40 left-4 right-4 z-[1000] p-3 bg-slate-950/95 border-2 border-amber-500/80 shadow-2xl rounded-xl flex items-center justify-between text-xs font-mono text-amber-400">
+          <div>
+            <span className="block text-[8px] font-black uppercase text-amber-500/80 tracking-widest leading-none mb-1">
+              🛠️ Developer Coords Picker
+            </span>
+            <span className="text-[11px] font-bold text-white">
+              [ {lastClicked.lat.toFixed(6)}, {lastClicked.lng.toFixed(6)} ],
+            </span>
+          </div>
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText(`[${lastClicked.lat.toFixed(6)}, ${lastClicked.lng.toFixed(6)}],`);
+            }}
+            className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 transition-colors text-slate-950 font-bold text-[10px] rounded-lg shadow"
+          >
+            Copy
+          </button>
+        </div>
+      )}
+
       {/* React-Leaflet Map Container */}
       <MapContainer
         center={nodes.main_gate}
@@ -140,6 +174,9 @@ export default function MapComponent() {
         {/* Bounds management component */}
         <MapBoundsUpdater pathCoordinates={activePath} />
 
+        {/* Listen for map clicks */}
+        <MapClickHandler onMapClick={setLastClicked} />
+
         {/* Premium CartoDB Voyager Map Tiles */}
         <TileLayer
           attribution='&copy; <a href="https://carto.com/">CARTO</a>'
@@ -149,14 +186,12 @@ export default function MapComponent() {
         {/* Navigation Route Path Rendering */}
         {activePath.length > 0 && (
           <>
-            {/* Outline backing line for enhanced visual high-contrast depth */}
             <Polyline
               positions={activePath}
               color="#0f172a"
               weight={10}
               opacity={0.8}
             />
-            {/* Highly visible vibrant neon-blue path overlay */}
             <Polyline
               positions={activePath}
               color="#00f0ff"
