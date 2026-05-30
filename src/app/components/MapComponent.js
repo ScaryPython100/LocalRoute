@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
@@ -38,14 +38,71 @@ export default function MapComponent() {
   const [destination, setDestination] = useState("");
   const [isClient, setIsClient] = useState(false);
   const [lastClicked, setLastClicked] = useState(null);
+  
+  // Autocomplete search states
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const containerRef = useRef(null);
+
+  const availableVillas = [
+    { id: "villa_149", number: "149", name: "Villa 149 (Central-East)" },
+    { id: "villa_105", number: "105", name: "Villa 105 (North-West)" },
+    { id: "villa_128", number: "128", name: "Villa 128 (North-East)" },
+    { id: "villa_127", number: "127", name: "Villa 127 (North Sector)" }
+  ];
 
   useEffect(() => {
     setIsClient(true);
   }, []);
 
-  const handleDestinationChange = (e) => {
-    setDestination(e.target.value);
+  // Click outside suggestions dropdown handler
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (containerRef.current && !containerRef.current.contains(event.target)) {
+        setShowSuggestions(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+
+  const handleInputChange = (e) => {
+    const val = e.target.value;
+    setSearchQuery(val);
+    setShowSuggestions(true);
+
+    if (val.trim() === "") {
+      setDestination("");
+      return;
+    }
+
+    // Direct match auto-routing
+    const exactMatch = availableVillas.find(v => v.number === val.trim());
+    if (exactMatch) {
+      setDestination(exactMatch.id);
+    } else {
+      const activeVilla = availableVillas.find(v => v.id === destination);
+      if (activeVilla && `Villa ${activeVilla.number}` !== val.trim()) {
+        setDestination("");
+      }
+    }
   };
+
+  const handleSelectVilla = (villa) => {
+    setDestination(villa.id);
+    setSearchQuery(`Villa ${villa.number}`);
+    setShowSuggestions(false);
+  };
+
+  // Filter suggestions based on searchQuery
+  const filteredSuggestions = searchQuery.trim() === ""
+    ? availableVillas
+    : availableVillas.filter(v => 
+        v.number.includes(searchQuery.trim()) || 
+        v.name.toLowerCase().includes(searchQuery.toLowerCase())
+      );
 
   // Get coordinates for active path
   const activePath = destination ? paths[destination] : [];
@@ -103,40 +160,73 @@ export default function MapComponent() {
   return (
     <div className="relative h-full w-full overflow-hidden rounded-2xl border border-slate-200 shadow-md dark:border-slate-800">
       
-      {/* High-contrast Gated Community Selector Overlay */}
-      <div className="absolute top-4 left-4 right-4 z-[1000] p-4 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-2 border-slate-200 dark:border-slate-850 shadow-2xl rounded-2xl flex flex-col gap-2.5">
+      {/* Premium Autocomplete Search Container */}
+      <div 
+        ref={containerRef}
+        className="absolute top-4 left-4 right-4 z-[1000] p-3.5 bg-slate-950/95 backdrop-blur-md border border-slate-850 shadow-2xl rounded-2xl flex flex-col gap-2.5"
+      >
         <div>
-          <label className="block text-[10px] uppercase font-black tracking-widest text-slate-450 dark:text-slate-400 mb-1.5">
+          <label className="block text-[9px] uppercase font-black tracking-widest text-slate-400 mb-1.5">
             📍 Target Destination Villa
           </label>
-          <div className="relative">
-            <select
-              value={destination}
-              onChange={handleDestinationChange}
-              className="w-full bg-slate-50 dark:bg-slate-950 border-2 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white rounded-xl px-4 py-3.5 text-base font-extrabold focus:outline-none focus:ring-4 focus:ring-cyan-500/30 focus:border-cyan-500 cursor-pointer appearance-none"
-            >
-              <option value="">🏡 Select Destination Villa...</option>
-              <option value="villa_149">🏡 Villa 149 (Central-East)</option>
-              <option value="villa_105">🏡 Villa 105 (North-West)</option>
-              <option value="villa_128">🏡 Villa 128 (North-East)</option>
-              <option value="villa_127">🏡 Villa 127 (North Sector)</option>
-            </select>
-            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-500 dark:text-slate-400">
-              <svg className="fill-current h-5 w-5 stroke-current stroke-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
-                <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/>
-              </svg>
-            </div>
+          <div className="relative flex items-center">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={handleInputChange}
+              onFocus={() => setShowSuggestions(true)}
+              placeholder="🔍 Enter Villa Number..."
+              className="w-full bg-slate-900 border-2 border-slate-800 text-white placeholder-slate-500 rounded-xl px-4 py-3.5 text-sm font-extrabold focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 transition-all"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => {
+                  setSearchQuery("");
+                  setDestination("");
+                  setShowSuggestions(false);
+                }}
+                className="absolute right-3.5 text-slate-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                  <path fillRule="evenodd" d="M5.47 5.47a.75.75 0 0 1 1.06 0L12 10.94l5.47-5.47a.75.75 0 1 1 1.06 1.06L13.06 12l5.47 5.47a.75.75 0 1 1-1.06 1.06L12 13.06l-5.47 5.47a.75.75 0 0 1-1.06-1.06L10.94 12 5.47 6.53a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+                </svg>
+              </button>
+            )}
           </div>
+
+          {/* Autocomplete Dropdown List */}
+          {showSuggestions && (
+            <div className="absolute left-0 right-0 mt-2 bg-slate-950/98 backdrop-blur border border-slate-800 rounded-xl shadow-2xl max-h-48 overflow-y-auto z-[2000] divide-y divide-slate-850">
+              {filteredSuggestions.length > 0 ? (
+                filteredSuggestions.map((villa) => (
+                  <button
+                    key={villa.id}
+                    onClick={() => handleSelectVilla(villa)}
+                    className="w-full text-left px-4 py-3 hover:bg-cyan-950/40 hover:text-cyan-400 transition-colors text-xs font-bold text-slate-300 flex items-center justify-between cursor-pointer"
+                  >
+                    <span>🏡 {villa.name}</span>
+                    <span className="text-[10px] bg-slate-900 border border-slate-800 px-2 py-0.5 rounded text-slate-500 uppercase tracking-widest font-black">
+                      Villa {villa.number}
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <div className="px-4 py-3.5 text-xs font-bold text-slate-500 text-center">
+                  ❌ No matching villas found
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {destination && (
-          <div className="flex items-center justify-between px-1 text-slate-900 dark:text-white">
+          <div className="flex items-center justify-between px-1 text-slate-300">
             <div className="flex items-center gap-1.5">
-              <span className="text-xs font-bold text-slate-400 dark:text-slate-500">Origin:</span>
-              <span className="text-xs font-extrabold text-amber-600 dark:text-amber-400">Main Entry Gate</span>
+              <span className="text-[10px] font-bold text-slate-500">Origin:</span>
+              <span className="text-[10px] font-extrabold text-amber-500">Main Entry Gate</span>
             </div>
             <div className="flex items-center gap-1">
-              <span className="text-xs font-black text-cyan-600 dark:text-cyan-400 animate-pulse">● ROUTING ACTIVE</span>
+              <span className="text-[9px] font-black text-cyan-400 animate-pulse">● ROUTING ACTIVE</span>
             </div>
           </div>
         )}

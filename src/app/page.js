@@ -42,20 +42,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Floating Guard Speed Notice at Bottom */}
-        <div className="absolute bottom-4 left-4 right-4 z-[999] pointer-events-none">
-          <div className="bg-slate-950/95 border border-slate-850 px-4 py-3 rounded-2xl shadow-2xl flex items-start gap-3 pointer-events-auto">
-            <div className="h-9 w-9 rounded-xl bg-cyan-950/50 border border-cyan-800/40 flex items-center justify-center text-cyan-400 flex-shrink-0">
-              ⚡
-            </div>
-            <div>
-              <h4 className="text-xs font-bold text-white tracking-tight">Delivery Driver Assistant</h4>
-              <p className="text-[10px] text-slate-400 leading-relaxed mt-0.5">
-                Ensure to stop at the gate and report resident villa number. Respect local community speed bumps and watch for children.
-              </p>
-            </div>
-          </div>
-        </div>
+
 
       </main>
     </div>
