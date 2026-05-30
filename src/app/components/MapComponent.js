@@ -6,15 +6,20 @@ import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { nodes, paths } from "../data/communityGraph";
 
+const communityBounds = [
+  [13.0035, 77.7168], // Southwest boundary
+  [13.0085, 77.7198]  // Northeast boundary
+];
+
 // Helper component to handle map bounds and auto-zooming
 function MapBoundsUpdater({ pathCoordinates }) {
   const map = useMap();
   useEffect(() => {
     if (pathCoordinates && pathCoordinates.length > 0) {
       const bounds = L.latLngBounds(pathCoordinates);
-      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 18, animate: true, duration: 1.5 });
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 18.5, animate: true, duration: 1.5 });
     } else {
-      map.setView(nodes.main_gate, 17, { animate: true, duration: 1.5 });
+      map.setView(nodes.main_gate, 17.5, { animate: true, duration: 1.5 });
     }
   }, [pathCoordinates, map]);
   return null;
@@ -257,7 +262,11 @@ export default function MapComponent() {
       {/* React-Leaflet Map Container */}
       <MapContainer
         center={nodes.main_gate}
-        zoom={17}
+        zoom={17.5}
+        minZoom={17}
+        maxZoom={19}
+        maxBounds={communityBounds}
+        maxBoundsViscosity={1.0}
         className="h-full w-full"
         zoomControl={false}
       >
