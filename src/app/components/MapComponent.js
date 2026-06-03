@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-import { nodes, paths } from "../data/communityGraph";
+import { nodes, findShortestPath, getRouteMetadata } from "../data/communityGraph";
 
 const communityBounds = [
   [13.0035, 77.7168], // Southwest boundary
@@ -12,44 +12,67 @@ const communityBounds = [
 ];
 
 // Helper component to handle map bounds and auto-zooming
-function MapBoundsUpdater({ pathCoordinates }) {
+function MapBoundsUpdater({ pathCoordinates, isNavigating }) {
   const map = useMap();
   useEffect(() => {
+    if (isNavigating) return;
     if (pathCoordinates && pathCoordinates.length > 0) {
       const bounds = L.latLngBounds(pathCoordinates);
-      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 18.5, animate: true, duration: 1.5 });
+      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 19, animate: true, duration: 1.5 });
     } else {
       map.setView(nodes.main_gate, 17.5, { animate: true, duration: 1.5 });
     }
-  }, [pathCoordinates, map]);
+  }, [pathCoordinates, map, isNavigating]);
   return null;
 }
 
-// Developer helper component to listen for map click coordinates
-function MapClickHandler({ onMapClick }) {
-  useMapEvents({
-    click(e) {
-      const { lat, lng } = e.latlng;
-      console.log(`[${lat.toFixed(6)}, ${lng.toFixed(6)}],`);
-      if (onMapClick) {
-        onMapClick({ lat, lng });
-      }
-    },
-  });
+// Math helpers for clipping the route line behind the user
+function getClosestPointOnSegment(p, a, b) {
+  const atob = { lat: b[0] - a[0], lng: b[1] - a[1] };
+  const atop = { lat: p[0] - a[0], lng: p[1] - a[1] };
+  const len = atob.lat * atob.lat + atob.lng * atob.lng;
+  const dot = atop.lat * atob.lat + atop.lng * atob.lng;
+  const t = Math.min(1, Math.max(0, len > 0 ? dot / len : 0));
+  return [a[0] + atob.lat * t, a[1] + atob.lng * t];
+}
+
+function getDistanceSq(p1, p2) {
+  return (p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2;
+}
+
+// Component to lock the map view to the user's live location
+function LocationFollower({ isNavigating, userLocation }) {
+  const map = useMap();
+  useEffect(() => {
+    if (isNavigating && userLocation) {
+      map.setView([userLocation.lat, userLocation.lng], 18, { animate: true, duration: 1.0 });
+    }
+  }, [isNavigating, userLocation, map]);
   return null;
 }
 
 export default function MapComponent() {
   const [destination, setDestination] = useState("");
+  const [origin, setOrigin] = useState("main_gate");
   const [isClient, setIsClient] = useState(false);
-  const [lastClicked, setLastClicked] = useState(null);
   
-  // Autocomplete search states
+  // Live Navigation tracking states
+  const [isNavigating, setIsNavigating] = useState(false);
+  const [userLocation, setUserLocation] = useState(null);
+  const [hasArrived, setHasArrived] = useState(false);
+  
+  // Autocomplete search states (Destination)
   const [searchQuery, setSearchQuery] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
   const containerRef = useRef(null);
 
-  const availableVillas = [
+  // Autocomplete search states (Origin)
+  const [originQuery, setOriginQuery] = useState("Main Entry Gate");
+  const [showOriginSuggestions, setShowOriginSuggestions] = useState(false);
+  const originRef = useRef(null);
+
+  const availableLocations = [
+    { id: "main_gate", number: "Gate", name: "Main Entry Gate" },
     { id: "villa_149", number: "149", name: "Villa 149 (Central-East)" },
     { id: "villa_105", number: "105", name: "Villa 105 (North-West)" },
     { id: "villa_128", number: "128", name: "Villa 128 (North-East)" },
@@ -60,11 +83,62 @@ export default function MapComponent() {
     setIsClient(true);
   }, []);
 
-  // Click outside suggestions dropdown handler
+  // Handle Geolocation tracking
+  useEffect(() => {
+    let watchId;
+    if (isNavigating) {
+      setHasArrived(false);
+      if ("geolocation" in navigator) {
+        watchId = navigator.geolocation.watchPosition(
+          (position) => {
+            setUserLocation({
+              lat: position.coords.latitude,
+              lng: position.coords.longitude,
+            });
+          },
+          (error) => {
+            console.error("Error watching position: ", error);
+            alert("Could not access your location. Please check browser permissions.");
+            setIsNavigating(false);
+          },
+          { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+        );
+      } else {
+        alert("Geolocation is not supported by your browser.");
+        setIsNavigating(false);
+      }
+    } else if (!hasArrived) {
+      setUserLocation(null);
+    }
+    
+    return () => {
+      if (watchId !== undefined) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+    };
+  }, [isNavigating, hasArrived]);
+
+  // Check for arrival
+  useEffect(() => {
+    if (isNavigating && userLocation && destination && nodes[destination]) {
+      const destCoords = nodes[destination];
+      const distSq = getDistanceSq([userLocation.lat, userLocation.lng], destCoords);
+      // Threshold reduced to approx 4-5 meters (from 22 meters)
+      if (distSq < 0.000000002) {
+        setHasArrived(true);
+        setIsNavigating(false);
+      }
+    }
+  }, [userLocation, isNavigating, destination]);
+
+  // Click outside suggestions dropdown handlers
   useEffect(() => {
     function handleClickOutside(event) {
       if (containerRef.current && !containerRef.current.contains(event.target)) {
         setShowSuggestions(false);
+      }
+      if (originRef.current && !originRef.current.contains(event.target)) {
+        setShowOriginSuggestions(false);
       }
     }
     document.addEventListener("mousedown", handleClickOutside);
@@ -73,44 +147,96 @@ export default function MapComponent() {
     };
   }, []);
 
-  const handleInputChange = (e) => {
+  const handleDestChange = (e) => {
     const val = e.target.value;
     setSearchQuery(val);
     setShowSuggestions(true);
+    setHasArrived(false);
 
     if (val.trim() === "") {
       setDestination("");
       return;
     }
 
-    // Direct match auto-routing
-    const exactMatch = availableVillas.find(v => v.number === val.trim());
+    const exactMatch = availableLocations.find(v => v.number === val.trim() && v.id !== "main_gate");
     if (exactMatch) {
       setDestination(exactMatch.id);
-    } else {
-      const activeVilla = availableVillas.find(v => v.id === destination);
-      if (activeVilla && `Villa ${activeVilla.number}` !== val.trim()) {
-        setDestination("");
-      }
     }
   };
 
-  const handleSelectVilla = (villa) => {
-    setDestination(villa.id);
-    setSearchQuery(`Villa ${villa.number}`);
-    setShowSuggestions(false);
+  const handleOriginChange = (e) => {
+    const val = e.target.value;
+    setOriginQuery(val);
+    setShowOriginSuggestions(true);
+    setHasArrived(false);
+
+    if (val.trim() === "") {
+      setOrigin("");
+      return;
+    }
+
+    const exactMatch = availableLocations.find(v => v.number === val.trim());
+    if (exactMatch) {
+      setOrigin(exactMatch.id);
+    }
   };
 
-  // Filter suggestions based on searchQuery
-  const filteredSuggestions = searchQuery.trim() === ""
-    ? availableVillas
-    : availableVillas.filter(v => 
+  const handleSelectDest = (loc) => {
+    setDestination(loc.id);
+    setSearchQuery(loc.id === "main_gate" ? loc.name : `Villa ${loc.number}`);
+    setShowSuggestions(false);
+    setHasArrived(false);
+  };
+
+  const handleSelectOrigin = (loc) => {
+    setOrigin(loc.id);
+    setOriginQuery(loc.id === "main_gate" ? loc.name : `Villa ${loc.number}`);
+    setShowOriginSuggestions(false);
+    setHasArrived(false);
+  };
+
+  const filteredDest = searchQuery.trim() === ""
+    ? availableLocations.filter(v => v.id !== "main_gate")
+    : availableLocations.filter(v => 
+        v.id !== "main_gate" && (
         v.number.includes(searchQuery.trim()) || 
-        v.name.toLowerCase().includes(searchQuery.toLowerCase())
+        v.name.toLowerCase().includes(searchQuery.toLowerCase()))
       );
 
-  // Get coordinates for active path
-  const activePath = destination ? paths[destination] : [];
+  const filteredOrigin = originQuery.trim() === ""
+    ? availableLocations
+    : availableLocations.filter(v => 
+        v.number.includes(originQuery.trim()) || 
+        v.name.toLowerCase().includes(originQuery.toLowerCase())
+      );
+
+  // Get dynamic path from origin to destination
+  const fullPath = destination && origin && destination !== origin ? findShortestPath(origin, destination) : [];
+  const routeMetadata = destination && origin && destination !== origin ? getRouteMetadata(origin, destination, fullPath) : null;
+
+  // Clip the route so it disappears behind the user as they move
+  let activePath = [...fullPath];
+  if (isNavigating && userLocation && fullPath.length > 1) {
+    const userPt = [userLocation.lat, userLocation.lng];
+    let minIdx = 0;
+    let minDistSq = Infinity;
+    let closestProj = null;
+
+    for (let i = 0; i < fullPath.length - 1; i++) {
+      const proj = getClosestPointOnSegment(userPt, fullPath[i], fullPath[i+1]);
+      const dSq = getDistanceSq(userPt, proj);
+      if (dSq < minDistSq) {
+        minDistSq = dSq;
+        minIdx = i;
+        closestProj = proj;
+      }
+    }
+
+    // Only clip if the user is reasonably close to the path (approx < 100m)
+    if (minDistSq < 0.000001) {
+      activePath = [closestProj, ...fullPath.slice(minIdx + 1)];
+    }
+  }
 
   if (!isClient) {
     return (
@@ -129,18 +255,26 @@ export default function MapComponent() {
 
     if (type === "gate") {
       iconHtml = `
-        <div class="flex items-center justify-center w-8 h-8 rounded-full bg-amber-500 text-white border-2 border-white shadow-xl shadow-amber-500/50">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4.5 h-4.5">
-            <path fill-rule="evenodd" d="M12 1.5a5.25 5.25 0 0 0-5.25 5.25v3a3 3 0 0 0-3 3v6.75a3 3 0 0 0 3 3h10.5a3 3 0 0 0 3-3v-6.75a3 3 0 0 0-3-3v-3c0-2.9-2.35-5.25-5.25-5.25Zm3.75 8.25v-3a3.75 3.75 0 1 0-7.5 0v3h7.5Z" clip-rule="evenodd" />
+        <div class="flex items-center justify-center w-6 h-6 rounded-full bg-amber-500/80 text-white border border-white/80 shadow-md">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-3.5 h-3.5">
+            <path fillRule="evenodd" d="M12 1.5a5.25 5.25 0 0 0-5.25 5.25v3a3 3 0 0 0-3 3v6.75a3 3 0 0 0 3 3h10.5a3 3 0 0 0 3-3v-6.75a3 3 0 0 0-3-3v-3c0-2.9-2.35-5.25-5.25-5.25Zm3.75 8.25v-3a3.75 3.75 0 1 0-7.5 0v3h7.5Z" clipRule="evenodd" />
           </svg>
         </div>
       `;
     } else if (type === "destination") {
       iconHtml = `
-        <div class="flex items-center justify-center w-9 h-9 rounded-full bg-cyan-500 text-slate-900 border-2 border-white shadow-2xl animate-pulse shadow-cyan-500/70">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5 text-slate-950 font-black">
-            <path fill-rule="evenodd" d="m11.54 22.351.07.04.028.016a.76.76 0 0 0 .723 0l.028-.015.071-.041a16.975 16.975 0 0 0 1.144-.742 19.58 19.58 0 0 0 2.683-2.282c1.944-1.99 3.963-4.98 3.963-8.827a8.25 8.25 0 0 0-16.5 0c0 3.846 2.02 6.837 3.963 8.827a19.58 19.58 0 0 0 2.682 2.282 16.975 16.975 0 0 0 1.145.742ZM12 13.5a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" clip-rule="evenodd" />
+        <div class="flex items-center justify-center w-6 h-6 rounded-full bg-cyan-500/80 text-slate-900 border border-white/80 shadow-md">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4 text-slate-950 font-black">
+            <path fillRule="evenodd" d="m11.54 22.351.07.04.028.016a.76.76 0 0 0 .723 0l.028-.015.071-.041a16.975 16.975 0 0 0 1.144-.742 19.58 19.58 0 0 0 2.683-2.282c1.944-1.99 3.963-4.98 3.963-8.827a8.25 8.25 0 0 0-16.5 0c0 3.846 2.02 6.837 3.963 8.827a19.58 19.58 0 0 0 2.682 2.282 16.975 16.975 0 0 0 1.145.742ZM12 13.5a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" clipRule="evenodd" />
           </svg>
+        </div>
+      `;
+    } else if (type === "user") {
+      iconHtml = `
+        <div class="relative flex items-center justify-center w-8 h-8">
+          <div class="absolute bg-blue-400/40 rounded-full w-8 h-8 animate-ping"></div>
+          <div class="absolute bg-blue-500/20 rounded-full w-6 h-6 flex items-center justify-center"></div>
+          <div class="absolute bg-blue-600 rounded-full w-4 h-4 border-2 border-white shadow-lg"></div>
         </div>
       `;
     } else {
@@ -157,8 +291,8 @@ export default function MapComponent() {
     return L.divIcon({
       html: iconHtml,
       className: "custom-leaflet-marker",
-      iconSize: type === "destination" ? [36, 36] : type === "gate" ? [32, 32] : [28, 28],
-      iconAnchor: type === "destination" ? [18, 18] : type === "gate" ? [16, 16] : [14, 14],
+      iconSize: type === "user" ? [32, 32] : type === "destination" || type === "gate" ? [24, 24] : [28, 28],
+      iconAnchor: type === "user" ? [16, 16] : type === "destination" || type === "gate" ? [12, 12] : [14, 14],
     });
   };
 
@@ -166,69 +300,110 @@ export default function MapComponent() {
     <div className="relative h-full w-full overflow-hidden rounded-2xl border border-slate-200 shadow-md dark:border-slate-800">
       
       {/* Premium Autocomplete Search Container */}
-      <div 
-        ref={containerRef}
-        className="absolute top-4 left-4 right-4 z-[1000] p-3.5 bg-slate-950/95 backdrop-blur-md border border-slate-850 shadow-2xl rounded-2xl flex flex-col gap-2.5"
-      >
-        <div>
+      <div className="absolute top-4 left-4 right-4 z-[1000] p-3.5 bg-slate-950/95 backdrop-blur-md border border-slate-850 shadow-2xl rounded-2xl flex flex-col gap-3">
+        
+        {/* Origin Search */}
+        <div ref={originRef} className="relative">
           <label className="block text-[9px] uppercase font-black tracking-widest text-slate-400 mb-1.5">
-            📍 Target Destination Villa
+            🟢 Start / Origin
           </label>
           <div className="relative flex items-center">
             <input
               type="text"
-              value={searchQuery}
-              onChange={handleInputChange}
-              onFocus={() => setShowSuggestions(true)}
-              placeholder="🔍 Enter Villa Number..."
-              className="w-full bg-slate-900 border-2 border-slate-800 text-white placeholder-slate-500 rounded-xl px-4 py-3.5 text-sm font-extrabold focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 transition-all"
+              value={originQuery}
+              onChange={handleOriginChange}
+              onFocus={() => setShowOriginSuggestions(true)}
+              placeholder="🔍 Enter Start Location..."
+              className="w-full bg-slate-900 border-2 border-slate-800 text-white placeholder-slate-500 rounded-xl px-4 py-3 text-sm font-extrabold focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 transition-all"
             />
-            {searchQuery && (
+            {originQuery && (
               <button
-                onClick={() => {
-                  setSearchQuery("");
-                  setDestination("");
-                  setShowSuggestions(false);
-                }}
+                onClick={() => { setOriginQuery(""); setOrigin(""); setShowOriginSuggestions(false); }}
                 className="absolute right-3.5 text-slate-400 hover:text-white transition-colors cursor-pointer"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
-                  <path fillRule="evenodd" d="M5.47 5.47a.75.75 0 0 1 1.06 0L12 10.94l5.47-5.47a.75.75 0 1 1 1.06 1.06L13.06 12l5.47 5.47a.75.75 0 1 1-1.06 1.06L12 13.06l-5.47 5.47a.75.75 0 0 1-1.06-1.06L10.94 12 5.47 6.53a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+                  <path fillRule="evenodd" d="M5.47 5.47a.75.75 0 0 1 1.06 0L12 10.94l5.47-5.47a.75.75 0 1 1 1.06 1.06L13.06 12l5.47 5.47a.75.75 0 1 1-1.06 1.06L12 13.06l-5.47 5.47a.75.75 0 0 1-1.06-1.06L10.94 12 5.47 6.53a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
                 </svg>
               </button>
             )}
           </div>
-
-          {/* Autocomplete Dropdown List */}
-          {showSuggestions && (
+          {showOriginSuggestions && (
             <div className="absolute left-0 right-0 mt-2 bg-slate-950/98 backdrop-blur border border-slate-800 rounded-xl shadow-2xl max-h-48 overflow-y-auto z-[2000] divide-y divide-slate-850">
-              {filteredSuggestions.length > 0 ? (
-                filteredSuggestions.map((villa) => (
+              {filteredOrigin.length > 0 ? (
+                filteredOrigin.map((loc) => (
                   <button
-                    key={villa.id}
-                    onClick={() => handleSelectVilla(villa)}
-                    className="w-full text-left px-4 py-3 hover:bg-cyan-950/40 hover:text-cyan-400 transition-colors text-xs font-bold text-slate-300 flex items-center justify-between cursor-pointer"
+                    key={loc.id}
+                    onClick={() => handleSelectOrigin(loc)}
+                    className="w-full text-left px-4 py-3 hover:bg-amber-950/40 hover:text-amber-400 transition-colors text-xs font-bold text-slate-300 flex items-center justify-between cursor-pointer"
                   >
-                    <span>🏡 {villa.name}</span>
-                    <span className="text-[10px] bg-slate-900 border border-slate-800 px-2 py-0.5 rounded text-slate-500 uppercase tracking-widest font-black">
-                      Villa {villa.number}
-                    </span>
+                    <span>{loc.id === "main_gate" ? "🚪" : "🏡"} {loc.name}</span>
+                    {loc.id !== "main_gate" && (
+                      <span className="text-[10px] bg-slate-900 border border-slate-800 px-2 py-0.5 rounded text-slate-500 uppercase tracking-widest font-black">
+                        {loc.number}
+                      </span>
+                    )}
                   </button>
                 ))
               ) : (
-                <div className="px-4 py-3.5 text-xs font-bold text-slate-500 text-center">
-                  ❌ No matching villas found
-                </div>
+                <div className="px-4 py-3.5 text-xs font-bold text-slate-500 text-center">❌ No match</div>
               )}
             </div>
           )}
         </div>
 
-        {destination && (
-          <div className="flex items-center justify-between px-1 text-slate-300">
+        {/* Destination Search */}
+        <div ref={containerRef} className="relative">
+          <label className="block text-[9px] uppercase font-black tracking-widest text-slate-400 mb-1.5">
+            📍 Target Destination
+          </label>
+          <div className="relative flex items-center">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={handleDestChange}
+              onFocus={() => setShowSuggestions(true)}
+              placeholder="🔍 Enter Destination..."
+              className="w-full bg-slate-900 border-2 border-slate-800 text-white placeholder-slate-500 rounded-xl px-4 py-3 text-sm font-extrabold focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 transition-all"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => { setSearchQuery(""); setDestination(""); setShowSuggestions(false); }}
+                className="absolute right-3.5 text-slate-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                  <path fillRule="evenodd" d="M5.47 5.47a.75.75 0 0 1 1.06 0L12 10.94l5.47-5.47a.75.75 0 1 1 1.06 1.06L13.06 12l5.47 5.47a.75.75 0 1 1-1.06 1.06L12 13.06l-5.47 5.47a.75.75 0 0 1-1.06-1.06L10.94 12 5.47 6.53a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+                </svg>
+              </button>
+            )}
+          </div>
+          {showSuggestions && (
+            <div className="absolute left-0 right-0 mt-2 bg-slate-950/98 backdrop-blur border border-slate-800 rounded-xl shadow-2xl max-h-48 overflow-y-auto z-[2000] divide-y divide-slate-850">
+              {filteredDest.length > 0 ? (
+                filteredDest.map((loc) => (
+                  <button
+                    key={loc.id}
+                    onClick={() => handleSelectDest(loc)}
+                    className="w-full text-left px-4 py-3 hover:bg-cyan-950/40 hover:text-cyan-400 transition-colors text-xs font-bold text-slate-300 flex items-center justify-between cursor-pointer"
+                  >
+                    <span>{loc.id === "main_gate" ? "🚪" : "🏡"} {loc.name}</span>
+                    {loc.id !== "main_gate" && (
+                      <span className="text-[10px] bg-slate-900 border border-slate-800 px-2 py-0.5 rounded text-slate-500 uppercase tracking-widest font-black">
+                        {loc.number}
+                      </span>
+                    )}
+                  </button>
+                ))
+              ) : (
+                <div className="px-4 py-3.5 text-xs font-bold text-slate-500 text-center">❌ No match</div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {destination && origin && destination !== origin && (
+          <div className="flex items-center justify-between px-1 text-slate-300 mt-1">
             <div className="flex items-center gap-1.5">
-              <span className="text-[10px] font-bold text-slate-500">Origin:</span>
-              <span className="text-[10px] font-extrabold text-amber-500">Main Entry Gate</span>
+              <span className="text-[10px] font-bold text-slate-500">Status:</span>
             </div>
             <div className="flex items-center gap-1">
               <span className="text-[9px] font-black text-cyan-400 animate-pulse">● ROUTING ACTIVE</span>
@@ -237,49 +412,27 @@ export default function MapComponent() {
         )}
       </div>
 
-      {/* Floating Developer Helper: Click Coordinate Display HUD */}
-      {lastClicked && (
-        <div className="absolute top-40 left-4 right-4 z-[1000] p-3 bg-slate-950/95 border-2 border-amber-500/80 shadow-2xl rounded-xl flex items-center justify-between text-xs font-mono text-amber-400">
-          <div>
-            <span className="block text-[8px] font-black uppercase text-amber-500/80 tracking-widest leading-none mb-1">
-              🛠️ Developer Coords Picker
-            </span>
-            <span className="text-[11px] font-bold text-white">
-              [ {lastClicked.lat.toFixed(6)}, {lastClicked.lng.toFixed(6)} ],
-            </span>
-          </div>
-          <button
-            onClick={() => {
-              navigator.clipboard.writeText(`[${lastClicked.lat.toFixed(6)}, ${lastClicked.lng.toFixed(6)}],`);
-            }}
-            className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 transition-colors text-slate-950 font-bold text-[10px] rounded-lg shadow"
-          >
-            Copy
-          </button>
-        </div>
-      )}
-
       {/* React-Leaflet Map Container */}
       <MapContainer
         center={nodes.main_gate}
         zoom={17.5}
-        minZoom={17}
-        maxZoom={19}
-        maxBounds={communityBounds}
-        maxBoundsViscosity={1.0}
+        minZoom={16}
+        maxZoom={22}
         className="h-full w-full"
         zoomControl={false}
       >
         {/* Bounds management component */}
-        <MapBoundsUpdater pathCoordinates={activePath} />
+        <MapBoundsUpdater pathCoordinates={activePath} isNavigating={isNavigating} />
 
-        {/* Listen for map clicks */}
-        <MapClickHandler onMapClick={setLastClicked} />
+        {/* Navigation tracking location panning */}
+        <LocationFollower isNavigating={isNavigating} userLocation={userLocation} />
 
-        {/* Premium CartoDB Voyager Map Tiles */}
+        {/* Standard OpenStreetMap to guarantee high zoom tile availability */}
         <TileLayer
-          attribution='&copy; <a href="https://carto.com/">CARTO</a>'
-          url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          maxZoom={22}
+          maxNativeZoom={19}
         />
 
         {/* Navigation Route Path Rendering */}
@@ -305,7 +458,7 @@ export default function MapComponent() {
         {/* Main Entry Gate Node Marker */}
         <Marker
           position={nodes.main_gate}
-          icon={createMarkerIcon("gate", "Main Security Gate", false)}
+          icon={createMarkerIcon("gate", "Main Security Gate", origin === "main_gate")}
         >
           <Popup className="custom-popup">
             <div className="p-1 font-sans">
@@ -320,12 +473,13 @@ export default function MapComponent() {
           if (id === "main_gate") return null;
 
           const isTargetDestination = id === destination;
+          const isOrigin = id === origin;
 
           return (
             <Marker
               key={id}
               position={coordinates}
-              icon={createMarkerIcon(isTargetDestination ? "destination" : "villa", id.replace("_", " "), isTargetDestination)}
+              icon={createMarkerIcon(isTargetDestination || isOrigin ? "destination" : "villa", id.replace("_", " "), isTargetDestination || isOrigin)}
             >
               <Popup className="custom-popup">
                 <div className="p-1 font-sans">
@@ -340,17 +494,124 @@ export default function MapComponent() {
             </Marker>
           );
         })}
+
+        {/* User Live Location Marker */}
+        {userLocation && (
+          <Marker
+            position={[userLocation.lat, userLocation.lng]}
+            icon={createMarkerIcon("user", "Your Location", false)}
+            zIndexOffset={1000}
+          />
+        )}
       </MapContainer>
 
-      {/* Floating Speed & Limit notice directly on the map context */}
-      {destination && (
-        <div className="absolute bottom-4 left-4 z-[1000] rounded-xl bg-slate-950/95 backdrop-blur px-3 py-2 text-white border border-slate-800 shadow-xl flex items-center gap-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-red-600 border border-white text-xs font-extrabold leading-none">
-            15
-          </div>
-          <div>
-            <div className="text-[9px] text-slate-400 font-black uppercase tracking-wider leading-none">Community Limit</div>
-            <div className="text-[11px] font-bold text-cyan-400">Strictly Monitored Speed</div>
+      {/* Navigation Bottom Sheet */}
+      {destination && origin && destination !== origin && routeMetadata && (
+        <div className="absolute bottom-0 left-0 right-0 z-[1000] p-4 pb-6 md:bottom-4 md:left-4 md:right-auto md:pb-4 md:w-[420px]">
+          <div className="bg-white dark:bg-slate-950 rounded-3xl shadow-[0_-10px_40px_rgba(0,0,0,0.3)] md:shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col transition-transform duration-300 transform translate-y-0">
+            
+            {/* Header / Top Row */}
+            {hasArrived ? (
+              <div className="p-5 flex flex-col gap-4 bg-green-50 dark:bg-green-900/20">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h3 className="text-xl font-black text-green-600 dark:text-green-400 flex items-center gap-2">
+                      <span>🎉</span> You Have Arrived!
+                    </h3>
+                    <p className="text-sm font-bold text-slate-600 dark:text-slate-400 mt-1">
+                      Welcome to {destination === "main_gate" ? "Main Gate" : `Villa ${destination.split("_")[1]}`}
+                    </p>
+                  </div>
+                  <button 
+                    onClick={() => { setDestination(""); setSearchQuery(""); setIsNavigating(false); setHasArrived(false); setUserLocation(null); }}
+                    className="p-2 bg-green-100 hover:bg-green-200 dark:bg-green-900/40 dark:hover:bg-green-800/60 rounded-full transition-colors cursor-pointer"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-green-700 dark:text-green-500">
+                      <path fillRule="evenodd" d="M5.47 5.47a.75.75 0 0 1 1.06 0L12 10.94l5.47-5.47a.75.75 0 1 1 1.06 1.06L13.06 12l5.47 5.47a.75.75 0 1 1-1.06 1.06L12 13.06l-5.47 5.47a.75.75 0 0 1-1.06-1.06L10.94 12 5.47 6.53a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="p-5 flex flex-col gap-4">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900 dark:text-white flex items-center gap-2">
+                      <span className="text-blue-500">📍</span> Routing to {destination === "main_gate" ? "Main Gate" : `Villa ${destination.split("_")[1]}`}
+                    </h3>
+                    <div className="flex items-center gap-3 mt-3">
+                      <div className="bg-slate-100 dark:bg-slate-900 px-3 py-1.5 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5 border border-slate-200 dark:border-slate-800">
+                        <span>📏</span> {routeMetadata.distance}
+                      </div>
+                      <div className="bg-blue-50 dark:bg-blue-900/30 px-3 py-1.5 rounded-lg text-xs font-bold text-blue-700 dark:text-blue-400 flex items-center gap-1.5 border border-blue-200 dark:border-blue-800/50">
+                        <span>⏱️</span> {routeMetadata.eta}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Close / Clear Route Button */}
+                  <button 
+                    onClick={() => { setDestination(""); setSearchQuery(""); setIsNavigating(false); setHasArrived(false); setUserLocation(null); }}
+                    className="p-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 rounded-full transition-colors cursor-pointer"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-slate-500 dark:text-slate-400">
+                      <path fillRule="evenodd" d="M5.47 5.47a.75.75 0 0 1 1.06 0L12 10.94l5.47-5.47a.75.75 0 1 1 1.06 1.06L13.06 12l5.47 5.47a.75.75 0 1 1-1.06 1.06L12 13.06l-5.47 5.47a.75.75 0 0 1-1.06-1.06L10.94 12 5.47 6.53a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Divider */}
+            <div className="border-t border-slate-100 dark:border-slate-800"></div>
+
+            {/* Steps Row */}
+            <div className="p-5 max-h-48 overflow-y-auto bg-slate-50 dark:bg-slate-900/50">
+              <ol className="relative border-l-2 border-slate-200 dark:border-slate-800 ml-3 space-y-5">
+                {routeMetadata.steps.map((step, index) => (
+                  <li key={index} className="ml-6">
+                    <span className="absolute flex items-center justify-center w-6 h-6 bg-white dark:bg-slate-950 rounded-full -left-[13px] ring-4 ring-slate-50 dark:ring-slate-900/50 border border-slate-200 dark:border-slate-700 text-[10px] font-black text-slate-500 dark:text-slate-400">
+                      {index + 1}
+                    </span>
+                    <p className="text-sm font-medium text-slate-700 dark:text-slate-300 leading-snug pt-0.5">
+                      {step}
+                    </p>
+                  </li>
+                ))}
+              </ol>
+            </div>
+
+            {/* Bottom Controls */}
+            <div className="p-4 bg-white dark:bg-slate-950 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-4">
+              {/* Start/Stop Navigation Button */}
+              {!isNavigating ? (
+                <button
+                  onClick={() => setIsNavigating(true)}
+                  className="flex-1 bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/30 font-bold px-4 py-3 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer text-base"
+                >
+                  <span>🚀 Start Navigation</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => setIsNavigating(false)}
+                  className="flex-1 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-500 border border-red-500/30 font-bold px-4 py-3 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer text-base"
+                >
+                  <span>🛑 Stop Navigation</span>
+                </button>
+              )}
+
+              {/* Speed Limit Notice */}
+              <div className="shrink-0 rounded-xl bg-slate-50 dark:bg-slate-900 px-3 py-2.5 border border-slate-200 dark:border-slate-800 flex items-center gap-2">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-red-600 border-2 border-white text-xs font-extrabold leading-none text-white">
+                  15
+                </div>
+                <div className="hidden sm:block text-left">
+                  <div className="text-[9px] text-slate-500 dark:text-slate-400 font-black uppercase tracking-wider leading-none">Limit</div>
+                  <div className="text-[10px] font-bold text-slate-700 dark:text-slate-300 mt-0.5">Strictly Monitored</div>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
       )}

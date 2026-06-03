@@ -27,20 +27,7 @@ export default function Home() {
           <MapComponent />
         </div>
 
-        {/* Floating Header Banner */}
-        <div className="absolute top-24 left-4 right-4 z-[999] pointer-events-none">
-          <div className="bg-slate-950/80 backdrop-blur-sm border border-slate-800 px-3 py-1.5 rounded-xl shadow-lg flex items-center justify-between">
-            <div className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span className="text-[10px] text-slate-300 font-bold uppercase tracking-wider">
-                Live Gated Navigation
-              </span>
-            </div>
-            <div className="text-[9px] text-cyan-400 font-black uppercase tracking-widest">
-              Palm Meadows Gate
-            </div>
-          </div>
-        </div>
+
 
 
 
