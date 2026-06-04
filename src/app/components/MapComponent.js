@@ -5,11 +5,23 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, useMapEvents 
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { nodes, findShortestPath, getRouteMetadata } from "../data/communityGraph";
+import { translations } from "../data/translations";
 
 const communityBounds = [
   [13.0035, 77.7168], // Southwest boundary
   [13.0085, 77.7198]  // Northeast boundary
 ];
+
+// Utility for Web Speech API Hands-Free Navigation
+const speakInstruction = (text, lang = "en-US") => {
+  if (typeof window !== "undefined" && window.speechSynthesis) {
+    window.speechSynthesis.cancel(); // Prevent overlapping queues
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.95; // Slightly slower for clarity
+    utterance.lang = lang;
+    window.speechSynthesis.speak(utterance);
+  }
+};
 
 // Helper component to handle map bounds and auto-zooming
 function MapBoundsUpdater({ pathCoordinates, isNavigating }) {
@@ -60,6 +72,11 @@ export default function MapComponent() {
   const [isNavigating, setIsNavigating] = useState(false);
   const [userLocation, setUserLocation] = useState(null);
   const [hasArrived, setHasArrived] = useState(false);
+  const lastSpokenStep = useRef(-1);
+
+  // i18n Language State
+  const [language, setLanguage] = useState('en');
+  const t = translations[language] || translations['en'];
   
   // Autocomplete search states (Destination)
   const [searchQuery, setSearchQuery] = useState("");
@@ -75,6 +92,16 @@ export default function MapComponent() {
     { id: "main_gate", number: "Gate", name: "Main Entry Gate" },
     { id: "villa_149", number: "149", name: "Villa 149 (Central-East)" },
     { id: "villa_105", number: "105", name: "Villa 105 (North-West)" },
+    { id: "villa_104", number: "104", name: "Villa 104 (Western Ave)" },
+    { id: "villa_103", number: "103", name: "Villa 103 (Western Ave)" },
+    { id: "villa_102", number: "102", name: "Villa 102 (Western Ave)" },
+    { id: "villa_101", number: "101", name: "Villa 101 (Western Ave)" },
+    { id: "villa_100", number: "100", name: "Villa 100 (Western Ave)" },
+    { id: "villa_99",  number: "99",  name: "Villa 99 (Western Ave)" },
+    { id: "villa_98",  number: "98",  name: "Villa 98 (Western Ave)" },
+    { id: "villa_97",  number: "97",  name: "Villa 97 (Western Ave)" },
+    { id: "villa_96",  number: "96",  name: "Villa 96 (Western Ave)" },
+    { id: "villa_95",  number: "95",  name: "Villa 95 (North-West End)" },
     { id: "villa_128", number: "128", name: "Villa 128 (North-East)" },
     { id: "villa_127", number: "127", name: "Villa 127 (North Sector)" }
   ];
@@ -183,14 +210,16 @@ export default function MapComponent() {
 
   const handleSelectDest = (loc) => {
     setDestination(loc.id);
-    setSearchQuery(loc.id === "main_gate" ? loc.name : `Villa ${loc.number}`);
+    const locName = loc.id === "main_gate" ? t.map.mainGate : `${t.map.villa} ${loc.number}`;
+    setSearchQuery(locName);
     setShowSuggestions(false);
     setHasArrived(false);
   };
 
   const handleSelectOrigin = (loc) => {
     setOrigin(loc.id);
-    setOriginQuery(loc.id === "main_gate" ? loc.name : `Villa ${loc.number}`);
+    const locName = loc.id === "main_gate" ? t.map.mainGate : `${t.map.villa} ${loc.number}`;
+    setOriginQuery(locName);
     setShowOriginSuggestions(false);
     setHasArrived(false);
   };
@@ -212,7 +241,7 @@ export default function MapComponent() {
 
   // Get dynamic path from origin to destination
   const fullPath = destination && origin && destination !== origin ? findShortestPath(origin, destination) : [];
-  const routeMetadata = destination && origin && destination !== origin ? getRouteMetadata(origin, destination, fullPath) : null;
+  const routeMetadata = destination && origin && destination !== origin ? getRouteMetadata(origin, destination, fullPath, language) : null;
 
   // Clip the route so it disappears behind the user as they move
   let activePath = [...fullPath];
@@ -238,12 +267,68 @@ export default function MapComponent() {
     }
   }
 
+  // Calculate active step index based on path consumption
+  let activeStepIndex = 0;
+  if (isNavigating && routeMetadata && fullPath.length > 0) {
+    const progress = 1 - (activePath.length / fullPath.length);
+    activeStepIndex = Math.min(
+      routeMetadata.steps.length - 1,
+      Math.max(0, Math.floor(progress * routeMetadata.steps.length))
+    );
+  }
+
+  // Trigger voice navigation when step changes
+  useEffect(() => {
+    if (isNavigating && routeMetadata && routeMetadata.steps) {
+      if (activeStepIndex !== lastSpokenStep.current) {
+        if (lastSpokenStep.current !== -1) {
+          speakInstruction(routeMetadata.steps[activeStepIndex], t.langCode);
+        }
+        lastSpokenStep.current = activeStepIndex;
+      }
+    }
+  }, [activeStepIndex, isNavigating, routeMetadata, t.langCode]);
+
+  // Handle arrived voice cue
+  useEffect(() => {
+    if (hasArrived) {
+      speakInstruction(t.speech.arrived, t.langCode);
+    }
+  }, [hasArrived, t.langCode, t.speech.arrived]);
+
+  const handleStartNavigation = () => {
+    setIsNavigating(true);
+    setHasArrived(false);
+    lastSpokenStep.current = 0; // Consider step 0 already spoken by initialization
+    speakInstruction(t.speech.navInit, t.langCode);
+  };
+
+  const handleStopNavigation = () => {
+    setIsNavigating(false);
+    lastSpokenStep.current = -1;
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+  };
+
+  const handleClearRoute = () => {
+    setDestination("");
+    setSearchQuery("");
+    setIsNavigating(false);
+    setHasArrived(false);
+    setUserLocation(null);
+    lastSpokenStep.current = -1;
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+  };
+
   if (!isClient) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-slate-100 dark:bg-slate-900 rounded-2xl">
         <div className="text-center">
           <div className="h-10 w-10 animate-spin rounded-full border-4 border-cyan-500 border-t-transparent mx-auto"></div>
-          <p className="mt-3 text-sm text-slate-500 font-bold uppercase tracking-wider">Initializing satellite maps...</p>
+          <p className="mt-3 text-sm text-slate-500 font-bold uppercase tracking-wider">Initializing...</p>
         </div>
       </div>
     );
@@ -304,16 +389,27 @@ export default function MapComponent() {
         
         {/* Origin Search */}
         <div ref={originRef} className="relative">
-          <label className="block text-[9px] uppercase font-black tracking-widest text-slate-400 mb-1.5">
-            🟢 Start / Origin
-          </label>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="block text-[9px] uppercase font-black tracking-widest text-slate-400">
+              🟢 {t.ui.startOrigin}
+            </label>
+            <select
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+              className="bg-slate-900 border border-slate-700 text-slate-300 text-[10px] uppercase font-bold rounded px-2 py-0.5 focus:outline-none focus:border-blue-500 cursor-pointer"
+            >
+              {Object.entries(translations).map(([key, val]) => (
+                <option key={key} value={key}>{val.name}</option>
+              ))}
+            </select>
+          </div>
           <div className="relative flex items-center">
             <input
               type="text"
               value={originQuery}
               onChange={handleOriginChange}
               onFocus={() => setShowOriginSuggestions(true)}
-              placeholder="🔍 Enter Start Location..."
+              placeholder={t.ui.enterStart}
               className="w-full bg-slate-900 border-2 border-slate-800 text-white placeholder-slate-500 rounded-xl px-4 py-3 text-sm font-extrabold focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 transition-all"
             />
             {originQuery && (
@@ -330,22 +426,24 @@ export default function MapComponent() {
           {showOriginSuggestions && (
             <div className="absolute left-0 right-0 mt-2 bg-slate-950/98 backdrop-blur border border-slate-800 rounded-xl shadow-2xl max-h-48 overflow-y-auto z-[2000] divide-y divide-slate-850">
               {filteredOrigin.length > 0 ? (
-                filteredOrigin.map((loc) => (
+                filteredOrigin.map((loc) => {
+                  const locName = loc.id === "main_gate" ? t.map.mainGate : `${t.map.villa} ${loc.number}`;
+                  return (
                   <button
                     key={loc.id}
                     onClick={() => handleSelectOrigin(loc)}
                     className="w-full text-left px-4 py-3 hover:bg-amber-950/40 hover:text-amber-400 transition-colors text-xs font-bold text-slate-300 flex items-center justify-between cursor-pointer"
                   >
-                    <span>{loc.id === "main_gate" ? "🚪" : "🏡"} {loc.name}</span>
+                    <span>{loc.id === "main_gate" ? "🚪" : "🏡"} {locName}</span>
                     {loc.id !== "main_gate" && (
                       <span className="text-[10px] bg-slate-900 border border-slate-800 px-2 py-0.5 rounded text-slate-500 uppercase tracking-widest font-black">
                         {loc.number}
                       </span>
                     )}
                   </button>
-                ))
+                )})
               ) : (
-                <div className="px-4 py-3.5 text-xs font-bold text-slate-500 text-center">❌ No match</div>
+                <div className="px-4 py-3.5 text-xs font-bold text-slate-500 text-center">{t.ui.noMatch}</div>
               )}
             </div>
           )}
@@ -354,7 +452,7 @@ export default function MapComponent() {
         {/* Destination Search */}
         <div ref={containerRef} className="relative">
           <label className="block text-[9px] uppercase font-black tracking-widest text-slate-400 mb-1.5">
-            📍 Target Destination
+            📍 {t.ui.targetDestination}
           </label>
           <div className="relative flex items-center">
             <input
@@ -362,7 +460,7 @@ export default function MapComponent() {
               value={searchQuery}
               onChange={handleDestChange}
               onFocus={() => setShowSuggestions(true)}
-              placeholder="🔍 Enter Destination..."
+              placeholder={t.ui.enterDest}
               className="w-full bg-slate-900 border-2 border-slate-800 text-white placeholder-slate-500 rounded-xl px-4 py-3 text-sm font-extrabold focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 transition-all"
             />
             {searchQuery && (
@@ -379,22 +477,24 @@ export default function MapComponent() {
           {showSuggestions && (
             <div className="absolute left-0 right-0 mt-2 bg-slate-950/98 backdrop-blur border border-slate-800 rounded-xl shadow-2xl max-h-48 overflow-y-auto z-[2000] divide-y divide-slate-850">
               {filteredDest.length > 0 ? (
-                filteredDest.map((loc) => (
+                filteredDest.map((loc) => {
+                  const locName = loc.id === "main_gate" ? t.map.mainGate : `${t.map.villa} ${loc.number}`;
+                  return (
                   <button
                     key={loc.id}
                     onClick={() => handleSelectDest(loc)}
                     className="w-full text-left px-4 py-3 hover:bg-cyan-950/40 hover:text-cyan-400 transition-colors text-xs font-bold text-slate-300 flex items-center justify-between cursor-pointer"
                   >
-                    <span>{loc.id === "main_gate" ? "🚪" : "🏡"} {loc.name}</span>
+                    <span>{loc.id === "main_gate" ? "🚪" : "🏡"} {locName}</span>
                     {loc.id !== "main_gate" && (
                       <span className="text-[10px] bg-slate-900 border border-slate-800 px-2 py-0.5 rounded text-slate-500 uppercase tracking-widest font-black">
                         {loc.number}
                       </span>
                     )}
                   </button>
-                ))
+                )})
               ) : (
-                <div className="px-4 py-3.5 text-xs font-bold text-slate-500 text-center">❌ No match</div>
+                <div className="px-4 py-3.5 text-xs font-bold text-slate-500 text-center">{t.ui.noMatch}</div>
               )}
             </div>
           )}
@@ -403,10 +503,10 @@ export default function MapComponent() {
         {destination && origin && destination !== origin && (
           <div className="flex items-center justify-between px-1 text-slate-300 mt-1">
             <div className="flex items-center gap-1.5">
-              <span className="text-[10px] font-bold text-slate-500">Status:</span>
+              <span className="text-[10px] font-bold text-slate-500">{t.ui.status}</span>
             </div>
             <div className="flex items-center gap-1">
-              <span className="text-[9px] font-black text-cyan-400 animate-pulse">● ROUTING ACTIVE</span>
+              <span className="text-[9px] font-black text-cyan-400 animate-pulse">● {t.ui.statusRoutingActive}</span>
             </div>
           </div>
         )}
@@ -456,43 +556,43 @@ export default function MapComponent() {
         )}
 
         {/* Main Entry Gate Node Marker */}
-        <Marker
-          position={nodes.main_gate}
-          icon={createMarkerIcon("gate", "Main Security Gate", origin === "main_gate")}
-        >
-          <Popup className="custom-popup">
-            <div className="p-1 font-sans">
-              <div className="font-bold text-slate-900 text-sm">🚪 Main Security Entrance</div>
-              <div className="text-xs text-slate-500 mt-0.5">Community QR scan point. Speed control begins here.</div>
-            </div>
-          </Popup>
-        </Marker>
+        {(origin === "main_gate" || destination === "main_gate") && (
+          <Marker
+            position={nodes.main_gate}
+            icon={createMarkerIcon("gate", "Main Security Gate", origin === "main_gate")}
+          >
+            <Popup className="custom-popup">
+              <div className="p-1 font-sans">
+                <div className="font-bold text-slate-900 text-sm">{t.map.mainSecurityEntrance}</div>
+                <div className="text-xs text-slate-500 mt-0.5">{t.map.gateDesc}</div>
+              </div>
+            </Popup>
+          </Marker>
+        )}
 
-        {/* Dynamic Gated Community Villa Node Markers */}
-        {Object.entries(nodes).map(([id, coordinates]) => {
-          if (id === "main_gate") return null;
-
-          const isTargetDestination = id === destination;
-          const isOrigin = id === origin;
-
-          return (
-            <Marker
-              key={id}
-              position={coordinates}
-              icon={createMarkerIcon(isTargetDestination || isOrigin ? "destination" : "villa", id.replace("_", " "), isTargetDestination || isOrigin)}
-            >
-              <Popup className="custom-popup">
-                <div className="p-1 font-sans">
-                  <div className="font-bold text-slate-900 text-sm">
-                    🏡 Villa {id.split("_")[1]}
+        {/* Dynamic Contextual Villa Node Markers */}
+        {Object.entries(nodes)
+          .filter(([id]) => id !== "main_gate" && (id === destination || id === origin))
+          .map(([id, coordinates]) => {
+            const isTargetDestination = id === destination;
+            return (
+              <Marker
+                key={id}
+                position={coordinates}
+                icon={createMarkerIcon("destination", id.replace("_", " "), true)}
+              >
+                <Popup className="custom-popup">
+                  <div className="p-1 font-sans">
+                    <div className="font-bold text-slate-900 text-sm">
+                      🏡 {t.map.villa} {id.split("_")[1]}
+                    </div>
+                    <div className="text-xs text-slate-500 mt-0.5">
+                      {isTargetDestination ? t.map.selectedTarget : t.map.gatedResidentVilla}
+                    </div>
                   </div>
-                  <div className="text-xs text-slate-500 mt-0.5">
-                    {isTargetDestination ? "🎯 Selected Delivery Target Destination" : "Gated Resident Villa"}
-                  </div>
-                </div>
-              </Popup>
-            </Marker>
-          );
+                </Popup>
+              </Marker>
+            );
         })}
 
         {/* User Live Location Marker */}
@@ -516,14 +616,14 @@ export default function MapComponent() {
                 <div className="flex items-start justify-between">
                   <div>
                     <h3 className="text-xl font-black text-green-600 dark:text-green-400 flex items-center gap-2">
-                      <span>🎉</span> You Have Arrived!
+                      <span>🎉</span> {t.ui.youHaveArrived}
                     </h3>
                     <p className="text-sm font-bold text-slate-600 dark:text-slate-400 mt-1">
-                      Welcome to {destination === "main_gate" ? "Main Gate" : `Villa ${destination.split("_")[1]}`}
+                      {t.ui.welcomeTo} {destination === "main_gate" ? t.map.mainGate : `${t.map.villa} ${destination.split("_")[1]}`}
                     </p>
                   </div>
                   <button 
-                    onClick={() => { setDestination(""); setSearchQuery(""); setIsNavigating(false); setHasArrived(false); setUserLocation(null); }}
+                    onClick={handleClearRoute}
                     className="p-2 bg-green-100 hover:bg-green-200 dark:bg-green-900/40 dark:hover:bg-green-800/60 rounded-full transition-colors cursor-pointer"
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-green-700 dark:text-green-500">
@@ -537,7 +637,7 @@ export default function MapComponent() {
                 <div className="flex items-start justify-between">
                   <div>
                     <h3 className="text-lg font-black text-slate-900 dark:text-white flex items-center gap-2">
-                      <span className="text-blue-500">📍</span> Routing to {destination === "main_gate" ? "Main Gate" : `Villa ${destination.split("_")[1]}`}
+                      <span className="text-blue-500">📍</span> {t.ui.routingTo} {destination === "main_gate" ? t.map.mainGate : `${t.map.villa} ${destination.split("_")[1]}`}
                     </h3>
                     <div className="flex items-center gap-3 mt-3">
                       <div className="bg-slate-100 dark:bg-slate-900 px-3 py-1.5 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5 border border-slate-200 dark:border-slate-800">
@@ -551,7 +651,7 @@ export default function MapComponent() {
                   
                   {/* Close / Clear Route Button */}
                   <button 
-                    onClick={() => { setDestination(""); setSearchQuery(""); setIsNavigating(false); setHasArrived(false); setUserLocation(null); }}
+                    onClick={handleClearRoute}
                     className="p-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 rounded-full transition-colors cursor-pointer"
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-slate-500 dark:text-slate-400">
@@ -566,18 +666,25 @@ export default function MapComponent() {
             <div className="border-t border-slate-100 dark:border-slate-800"></div>
 
             {/* Steps Row */}
-            <div className="p-5 max-h-48 overflow-y-auto bg-slate-50 dark:bg-slate-900/50">
+            <div className="p-5 max-h-48 overflow-y-auto bg-slate-50 dark:bg-slate-900/50 scroll-smooth">
               <ol className="relative border-l-2 border-slate-200 dark:border-slate-800 ml-3 space-y-5">
-                {routeMetadata.steps.map((step, index) => (
-                  <li key={index} className="ml-6">
-                    <span className="absolute flex items-center justify-center w-6 h-6 bg-white dark:bg-slate-950 rounded-full -left-[13px] ring-4 ring-slate-50 dark:ring-slate-900/50 border border-slate-200 dark:border-slate-700 text-[10px] font-black text-slate-500 dark:text-slate-400">
+                {routeMetadata.steps.map((step, index) => {
+                  const isActive = isNavigating && index === activeStepIndex && !hasArrived;
+                  const isPast = (isNavigating && index < activeStepIndex) || hasArrived;
+                  return (
+                  <li key={index} className={`ml-6 transition-opacity duration-300 ${isPast ? 'opacity-40' : ''}`}>
+                    <span className={`absolute flex items-center justify-center w-6 h-6 rounded-full -left-[13px] ring-4 transition-colors duration-300 text-[10px] font-black ${
+                      isActive 
+                        ? 'bg-blue-600 text-white ring-blue-600/30 border-2 border-blue-600 shadow-md' 
+                        : 'bg-white dark:bg-slate-950 ring-slate-50 dark:ring-slate-900/50 border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'
+                    }`}>
                       {index + 1}
                     </span>
-                    <p className="text-sm font-medium text-slate-700 dark:text-slate-300 leading-snug pt-0.5">
+                    <p className={`text-sm leading-snug pt-0.5 transition-colors duration-300 ${isActive ? 'text-blue-600 dark:text-blue-400 font-extrabold' : 'text-slate-700 dark:text-slate-300 font-medium'}`}>
                       {step}
                     </p>
                   </li>
-                ))}
+                )})}
               </ol>
             </div>
 
@@ -586,17 +693,17 @@ export default function MapComponent() {
               {/* Start/Stop Navigation Button */}
               {!isNavigating ? (
                 <button
-                  onClick={() => setIsNavigating(true)}
+                  onClick={handleStartNavigation}
                   className="flex-1 bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/30 font-bold px-4 py-3 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer text-base"
                 >
-                  <span>🚀 Start Navigation</span>
+                  <span>{t.ui.startNavigation}</span>
                 </button>
               ) : (
                 <button
-                  onClick={() => setIsNavigating(false)}
+                  onClick={handleStopNavigation}
                   className="flex-1 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-500 border border-red-500/30 font-bold px-4 py-3 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer text-base"
                 >
-                  <span>🛑 Stop Navigation</span>
+                  <span>{t.ui.stopNavigation}</span>
                 </button>
               )}
 
@@ -606,8 +713,8 @@ export default function MapComponent() {
                   15
                 </div>
                 <div className="hidden sm:block text-left">
-                  <div className="text-[9px] text-slate-500 dark:text-slate-400 font-black uppercase tracking-wider leading-none">Limit</div>
-                  <div className="text-[10px] font-bold text-slate-700 dark:text-slate-300 mt-0.5">Strictly Monitored</div>
+                  <div className="text-[9px] text-slate-500 dark:text-slate-400 font-black uppercase tracking-wider leading-none">{t.ui.limit}</div>
+                  <div className="text-[10px] font-bold text-slate-700 dark:text-slate-300 mt-0.5">{t.ui.strictlyMonitored}</div>
                 </div>
               </div>
             </div>

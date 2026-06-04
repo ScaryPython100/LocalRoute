@@ -1,9 +1,21 @@
+import { translations } from './translations';
+
 export const nodes = {
-  main_gate: [13.004708, 77.718294],
+  main_gate: [13.004709, 77.718304],
   villa_149: [13.005808, 77.718856],
-  villa_105: [13.005998, 77.718383],
-  villa_128: [13.007847, 77.719172],
-  villa_127: [13.007814, 77.719042]
+  villa_105: [13.005978, 77.718388],
+  villa_104: [13.006048, 77.718388],
+  villa_103: [13.006138, 77.718399],
+  villa_102: [13.006218, 77.718420],
+  villa_101: [13.006308, 77.718430],
+  villa_100: [13.006408, 77.718450],
+  villa_99:  [13.006500, 77.718470],
+  villa_98:  [13.006677, 77.718489],
+  villa_97:  [13.006757, 77.718509],
+  villa_96:  [13.006767, 77.718509],
+  villa_95:  [13.006847, 77.718519],
+  villa_128: [13.007847, 77.719092],
+  villa_127: [13.007794, 77.719082]
 };
 
 const internalWaypoints = {
@@ -22,7 +34,17 @@ const graphEdges = {
   wp_bend1: ['main_gate', 'wp_spine'],
   wp_spine: ['wp_bend1', 'wp_105_turn', 'wp_mid_turn'],
   wp_105_turn: ['wp_spine', 'villa_105'],
-  villa_105: ['wp_105_turn'],
+  villa_105: ['wp_105_turn', 'villa_104'],
+  villa_104: ['villa_105', 'villa_103'],
+  villa_103: ['villa_104', 'villa_102'],
+  villa_102: ['villa_103', 'villa_101'],
+  villa_101: ['villa_102', 'villa_100'],
+  villa_100: ['villa_101', 'villa_99'],
+  villa_99: ['villa_100', 'villa_98'],
+  villa_98: ['villa_99', 'villa_97'],
+  villa_97: ['villa_98', 'villa_96'],
+  villa_96: ['villa_97', 'villa_95'],
+  villa_95: ['villa_96'],
   wp_mid_turn: ['wp_spine', 'villa_149', 'wp_ne_bend'],
   villa_149: ['wp_mid_turn'],
   wp_ne_bend: ['wp_mid_turn', 'wp_tr_lane'],
@@ -75,57 +97,11 @@ function getDistance(coord1, coord2) {
   return R * c;
 }
 
-const hardcodedMetadata = {
-  villa_105: {
-    distance: "180m",
-    eta: "1 min drive / 2 min walk",
-    steps: [
-      "Enter through the Main Gate security check.",
-      "Drive straight along the main avenue for 150 meters.",
-      "Villa 105 will be immediately on your right hand side."
-    ]
-  },
-  villa_149: {
-    distance: "210m",
-    eta: "1 min drive / 3 min walk",
-    steps: [
-      "Enter through the Main Gate security check.",
-      "Follow the main avenue straight past the first intersection.",
-      "Turn right at the second junction.",
-      "Villa 149 is the first house on the left."
-    ]
-  },
-  villa_128: {
-    distance: "380m",
-    eta: "2 min drive / 5 min walk",
-    steps: [
-      "Enter through the Main Gate.",
-      "Follow the spine road all the way to the north-east sector.",
-      "Take the final right turn into the East Lane.",
-      "Villa 128 is located at the end of the cul-de-sac on the right."
-    ]
-  },
-  villa_127: {
-    distance: "360m",
-    eta: "2 min drive / 4 min walk",
-    steps: [
-      "Enter through the Main Gate.",
-      "Follow the spine road to the north-east sector.",
-      "Take the final right turn into the East Lane.",
-      "Villa 127 is the second-to-last house on the left side."
-    ]
-  }
-};
-
-export function getRouteMetadata(startId, endId, pathCoordinates) {
+export function getRouteMetadata(startId, endId, pathCoordinates, lang = 'en') {
   if (!startId || !endId) return null;
 
-  // If the user is routing from the Main Gate, use the hardcoded text instructions
-  if (startId === "main_gate" && hardcodedMetadata[endId]) {
-    return hardcodedMetadata[endId];
-  }
+  const t = translations[lang] || translations['en'];
 
-  // Otherwise, calculate dynamic distance and generate generic steps
   let totalDistance = 0;
   if (pathCoordinates && pathCoordinates.length > 1) {
     for (let i = 0; i < pathCoordinates.length - 1; i++) {
@@ -134,20 +110,30 @@ export function getRouteMetadata(startId, endId, pathCoordinates) {
   }
 
   const distStr = totalDistance > 0 ? `${Math.round(totalDistance)}m` : "Unknown";
-  // Assuming driving speed ~ 15km/h (250m/min) and walking ~ 5km/h (83m/min)
   const driveTime = Math.max(1, Math.round(totalDistance / 250));
   const walkTime = Math.max(1, Math.round(totalDistance / 83));
+  const etaStr = t.eta.driveWalk.replace('{drive}', driveTime).replace('{walk}', walkTime);
 
-  const startName = startId === "main_gate" ? "the Main Gate" : `Villa ${startId.split("_")[1]}`;
-  const endName = endId === "main_gate" ? "the Main Gate" : `Villa ${endId.split("_")[1]}`;
+  // If the user is routing from the Main Gate, use the localized text instructions
+  if (startId === "main_gate" && t.routes[endId]) {
+    return {
+      distance: distStr,
+      eta: etaStr,
+      steps: t.routes[endId]
+    };
+  }
+
+  // Otherwise, use localized generic fallback steps
+  const startName = startId === "main_gate" ? t.map.mainGate : `${t.map.villa} ${startId.split("_")[1]}`;
+  const endName = endId === "main_gate" ? t.map.mainGate : `${t.map.villa} ${endId.split("_")[1]}`;
 
   return {
     distance: distStr,
-    eta: `${driveTime} min drive / ${walkTime} min walk`,
+    eta: etaStr,
     steps: [
-      `Depart from ${startName}.`,
-      `Follow the highlighted navigation path along the community roads.`,
-      `Arrive at your destination: ${endName}.`
+      t.routes.fallback[0].replace('{start}', startName),
+      t.routes.fallback[1],
+      t.routes.fallback[2].replace('{end}', endName)
     ]
   };
 }
